@@ -26,7 +26,6 @@ import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import org.wso2.carbon.extension.identity.helper.FederatedAuthenticatorUtil;
 import org.wso2.carbon.identity.application.authentication.framework.AbstractApplicationAuthenticator;
-import org.wso2.carbon.identity.application.authentication.framework.AuthenticationFlowHandler;
 import org.wso2.carbon.identity.application.authentication.framework.AuthenticatorFlowStatus;
 import org.wso2.carbon.identity.application.authentication.framework.config.ConfigurationFacade;
 import org.wso2.carbon.identity.application.authentication.framework.config.model.StepConfig;
@@ -34,7 +33,6 @@ import org.wso2.carbon.identity.application.authentication.framework.context.Aut
 import org.wso2.carbon.identity.application.authentication.framework.exception.AuthenticationFailedException;
 import org.wso2.carbon.identity.application.authentication.framework.exception.InvalidCredentialsException;
 import org.wso2.carbon.identity.application.authentication.framework.exception.LogoutFailedException;
-import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedIdPData;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
@@ -71,9 +69,7 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 
@@ -365,7 +361,7 @@ public abstract class AbstractOTPAuthenticator extends AbstractApplicationAuthen
                     throw e;
                 }
                 setResolvedUserInContext(context, authenticatedUserFromContext);
-            } else if (isPreviousIdPAuthenticationFlowHandler(context)) {
+            } else if (AuthenticatorUtils.isPreviousIdPAuthenticationFlowHandler(context)) {
                 /*
                  * If the previous authentication has only been done by AuthenticationFlowHandlers, need to check if the
                  * user exists in the database.
@@ -1718,26 +1714,6 @@ public abstract class AbstractOTPAuthenticator extends AbstractApplicationAuthen
     }
 
     /**
-     * This method checks if all the authentication steps up to now have been performed by authenticators that
-     * implements AuthenticationFlowHandler interface. If so, it returns true.
-     * AuthenticationFlowHandlers may not perform actual authentication though the authenticated user is set in the
-     * context. Hence, this method can be used to determine if the user has been authenticated by a previous step.
-     *
-     * @param context   AuthenticationContext.
-     * @return True if all the authentication steps up to now have been performed by AuthenticationFlowHandlers.
-     */
-    private boolean isPreviousIdPAuthenticationFlowHandler(AuthenticationContext context) {
-
-        Map<String, AuthenticatedIdPData> currentAuthenticatedIdPs = context.getCurrentAuthenticatedIdPs();
-        return currentAuthenticatedIdPs != null && !currentAuthenticatedIdPs.isEmpty() &&
-                currentAuthenticatedIdPs.values().stream().filter(Objects::nonNull)
-                        .map(AuthenticatedIdPData::getAuthenticators).filter(Objects::nonNull)
-                        .flatMap(List::stream)
-                        .allMatch(authenticator ->
-                                authenticator.getApplicationAuthenticator() instanceof AuthenticationFlowHandler);
-    }
-
-    /**
      * This method is used to resolve an authenticated user from the user stores.
      *
      * @param authenticatedUser The authenticated user.
@@ -1928,7 +1904,7 @@ public abstract class AbstractOTPAuthenticator extends AbstractApplicationAuthen
      */
     protected boolean isOTPAsFirstFactor(AuthenticationContext context) {
 
-        return (context.getCurrentStep() == 1 || isPreviousIdPAuthenticationFlowHandler(context));
+        return (context.getCurrentStep() == 1 || AuthenticatorUtils.isPreviousIdPAuthenticationFlowHandler(context));
     }
 
     protected abstract String getAuthenticatorErrorPrefix();

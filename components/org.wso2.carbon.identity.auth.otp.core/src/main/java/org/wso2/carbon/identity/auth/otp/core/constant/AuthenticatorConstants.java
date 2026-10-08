@@ -169,7 +169,12 @@ public class AuthenticatorConstants {
         ERROR_CODE_ERROR_CHECKING_USER_EXISTENCE("65035",
                 "Error occurred while checking existence of user: %s"),
         ERROR_CODE_RESEND_LIMIT_EXCEEDED("65036", "Resend limit exceeded for user: %s"),
-        ERROR_CODE_RETRY_LIMIT_EXCEEDED("65037", "Retry limit exceeded for user: %s");
+        ERROR_CODE_RETRY_LIMIT_EXCEEDED("65037", "Retry limit exceeded for user: %s"),
+        ERROR_CODE_ERROR_REDIRECTING_TO_ENROLLMENT_PAGE("65038",
+                "Error occurred while redirecting to the enrollment page"),
+        ERROR_CODE_ENROLLMENT_VALUE_ALREADY_CONFIGURED("65039",
+                "A value was configured for user: %s while an enrollment was in progress"),
+        ERROR_CODE_ERROR_ENROLLING_VALUE("65040", "Error occurred while enrolling the value for user: %s");
 
         private final String code;
         private final String message;

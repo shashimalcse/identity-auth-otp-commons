@@ -26,6 +26,7 @@
             <class name="org.wso2.carbon.identity.auth.otp.core.AbstractOTPAuthenticatorFlowTest"/>
             <class name="org.wso2.carbon.identity.auth.otp.core.ContextBasedOTPControlTest"/>
             <class name="org.wso2.carbon.identity.auth.otp.core.util.AuthenticatorUtilsTest"/>
+            <class name="org.wso2.carbon.identity.auth.otp.core.enrollment.AbstractOTPProgressiveEnrollmentHandlerTest"/>
         </classes>
     </test>
 </suite>
