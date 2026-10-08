@@ -32,7 +32,6 @@ import org.wso2.carbon.identity.application.authentication.framework.context.Aut
 import org.wso2.carbon.identity.application.authentication.framework.exception.AuthenticationFailedException;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedIdPData;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
-import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatorParamMetadata;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
 import org.wso2.carbon.identity.application.common.model.Property;
@@ -176,6 +175,15 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
                 "The authenticator is required on the page URL for app native authentication.");
         assertFalse(redirectUrl.contains("authFailure"), "No error is expected when requesting a value.");
         assertTrue(handler.isAwaitingValue(context));
+    }
+
+    @Test
+    public void testOrganizationSettingIsNotReadWithoutPrecedingAuthenticatedUser() throws Exception {
+
+        context = buildContext(null);
+
+        assertFalse(handler.handleInitiation(request, response, context));
+        verify(governanceService, never()).getConfiguration(any(String[].class), anyString());
     }
 
     @Test
@@ -429,6 +437,31 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
     }
 
     @Test
+    public void testChannelCanAddValidationWithItsOwnMessage() throws Exception {
+
+        handler.blockedValue = OTHER_VALUE;
+        setAwaitingValue();
+        when(request.getParameter(VALUE_PARAM)).thenReturn(OTHER_VALUE);
+
+        assertTrue(handler.handleInitiation(request, response, context));
+
+        assertTrue(captureRedirectUrl().endsWith(MESSAGE_PREFIX + ".blocked"));
+        assertNull(handler.getPendingValue(context), "No OTP is sent to a value rejected by the channel.");
+    }
+
+    @Test
+    public void testDefaultValidationIsKeptWhenChannelAddsValidation() throws Exception {
+
+        handler.blockedValue = OTHER_VALUE;
+        setAwaitingValue();
+        when(request.getParameter(VALUE_PARAM)).thenReturn("not-a-number");
+
+        assertTrue(handler.handleInitiation(request, response, context));
+
+        assertTrue(captureRedirectUrl().endsWith(MESSAGE_PREFIX + EnrollmentConstants.INVALID_VALUE_MESSAGE_SUFFIX));
+    }
+
+    @Test
     public void testInvalidConfiguredRegexRejectsAllValues() throws Exception {
 
         organizationSettings.put(REGEX_SETTING, "^([0-9");
@@ -484,7 +517,7 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
         doAnswer(invocation -> handler.events.add("update")).when(userStoreManager)
                 .setUserClaimValues(anyString(), anyMap(), isNull());
 
-        handler.completeEnrollment(context, true);
+        handler.completeEnrollment(context);
 
         ArgumentCaptor<Map<String, String>> claimsCaptor = ArgumentCaptor.forClass(Map.class);
         verify(userStoreManager).setUserClaimValues(anyString(), claimsCaptor.capture(), isNull());
@@ -497,18 +530,6 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
         assertNull(handler.getPendingValue(context));
         assertNull(context.getProperty(AUTHENTICATOR + EnrollmentConstants.OTP_SENT_TO_VALUE));
         assertNull(context.getProperty(AUTHENTICATOR + EnrollmentConstants.ENROLLMENT_ATTEMPTS));
-    }
-
-    @Test
-    public void testValueIsNotSavedWhenAuthenticationDidNotVerifyOtp() throws Exception {
-
-        setPendingValue(VALUE);
-        handler.recordOTPSent(context, VALUE);
-
-        handler.completeEnrollment(context, false);
-
-        verify(userStoreManager, never()).setUserClaimValues(anyString(), anyMap(), any());
-        assertNull(handler.getPendingValue(context));
     }
 
     @Test
@@ -566,33 +587,9 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
     @Test
     public void testNothingIsSavedWithoutPendingValue() throws Exception {
 
-        handler.completeEnrollment(context, true);
+        handler.completeEnrollment(context);
 
         verify(userStoreManager, never()).setUserClaimValues(anyString(), anyMap(), any());
-    }
-
-    @Test
-    public void testAppNativeAuthenticationRequestsValue() {
-
-        setAwaitingValue();
-        List<AuthenticatorParamMetadata> params = new ArrayList<>();
-        List<String> requiredParams = new ArrayList<>();
-
-        assertTrue(handler.addAuthInitiationParams(context, params, requiredParams));
-        assertEquals(requiredParams, Collections.singletonList(VALUE_PARAM));
-        assertEquals(params.get(0).getName(), VALUE_PARAM);
-    }
-
-    @Test
-    public void testAppNativeAuthenticationIsUnchangedWhenValueIsNotRequested() {
-
-        setPendingValue(VALUE);
-        List<AuthenticatorParamMetadata> params = new ArrayList<>();
-        List<String> requiredParams = new ArrayList<>();
-
-        assertFalse(handler.addAuthInitiationParams(context, params, requiredParams));
-        assertTrue(params.isEmpty());
-        assertTrue(requiredParams.isEmpty());
     }
 
     @Test
@@ -680,7 +677,7 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
     private void assertCompletionFails(AuthenticatorConstants.ErrorMessages expectedError) {
 
         try {
-            handler.completeEnrollment(context, true);
+            handler.completeEnrollment(context);
             fail("Expected the enrollment to fail.");
         } catch (AuthenticationFailedException e) {
             assertEquals(e.getErrorCode(), "TEST-" + expectedError.getCode());
@@ -731,6 +728,8 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
 
         private final List<String> events = new ArrayList<>();
         private int maxEnrollmentAttempts = EnrollmentConstants.DEFAULT_MAX_ENROLLMENT_ATTEMPTS;
+        // A value that the channel rejects in addition to the default validation.
+        private String blockedValue;
 
         TestHandler(String authenticatorName) {
 
@@ -753,18 +752,6 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
         protected String getValueParameterName() {
 
             return VALUE_PARAM;
-        }
-
-        @Override
-        protected String getValueParameterDisplayName() {
-
-            return "Test Value";
-        }
-
-        @Override
-        protected String getValueParameterI18nKey() {
-
-            return "test.value.param";
         }
 
         @Override
@@ -807,6 +794,17 @@ public class AbstractOTPProgressiveEnrollmentHandlerTest {
         protected int getMaxEnrollmentAttempts() {
 
             return maxEnrollmentAttempts;
+        }
+
+        @Override
+        protected String validateValue(String value, AuthenticationContext context)
+                throws AuthenticationFailedException {
+
+            String error = super.validateValue(value, context);
+            if (error != null) {
+                return error;
+            }
+            return value.equals(blockedValue) ? ".blocked" : null;
         }
 
         @Override

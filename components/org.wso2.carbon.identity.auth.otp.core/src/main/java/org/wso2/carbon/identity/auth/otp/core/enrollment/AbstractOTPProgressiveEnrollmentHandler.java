@@ -28,7 +28,6 @@ import org.wso2.carbon.identity.application.authentication.framework.config.mode
 import org.wso2.carbon.identity.application.authentication.framework.context.AuthenticationContext;
 import org.wso2.carbon.identity.application.authentication.framework.exception.AuthenticationFailedException;
 import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatedUser;
-import org.wso2.carbon.identity.application.authentication.framework.model.AuthenticatorParamMetadata;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkConstants;
 import org.wso2.carbon.identity.application.authentication.framework.util.FrameworkUtils;
 import org.wso2.carbon.identity.application.common.model.Property;
@@ -49,7 +48,6 @@ import org.wso2.carbon.utils.multitenancy.MultitenantUtils;
 
 import java.io.IOException;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -79,11 +77,11 @@ import static org.wso2.carbon.user.core.UserCoreConstants.PRIMARY_DEFAULT_DOMAIN
  *     <li>{@link #handleInitiation} before initiating the OTP flow,</li>
  *     <li>{@link #isValueSubmission} while resolving the scenario of a request,</li>
  *     <li>{@link #getPendingValue} while resolving the value to send the OTP to, when the user has no value,</li>
- *     <li>{@link #recordOTPSent} when sending the OTP,</li>
- *     <li>{@link #completeEnrollment} after the OTP is verified, and</li>
- *     <li>{@link #addAuthInitiationParams} while building the data for app native authentication.</li>
+ *     <li>{@link #recordOTPSent} when sending the OTP, and</li>
+ *     <li>{@link #completeEnrollment} after the OTP is verified.</li>
  * </ul>
- * The OTP authenticator owns sending and verifying the OTP. A handler is shared across authentication requests.
+ * While {@link #isAwaitingValue} is true, app native authentication should request the value parameter instead of the
+ * OTP. The OTP authenticator owns sending and verifying the OTP. A handler is shared across authentication requests.
  * Hence, it must be stateless, keeping the state of an enrollment in the authentication context.
  */
 public abstract class AbstractOTPProgressiveEnrollmentHandler {
@@ -158,7 +156,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
      * @param context AuthenticationContext.
      * @return True if a value is requested from the user or is pending enrollment.
      */
-    public boolean isEnrollmentInProgress(AuthenticationContext context) {
+    private boolean isEnrollmentInProgress(AuthenticationContext context) {
 
         return isAwaitingValue(context) || StringUtils.isNotBlank(getPendingValue(context));
     }
@@ -199,16 +197,15 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Save the value pending enrollment to the user profile as verified, once the authentication with the OTP sent to
-     * it succeeds. Nothing is saved if the authentication succeeded by other means, or the OTP was not sent to the
-     * value.
+     * Save the value pending enrollment to the user profile as verified. Call this only after the OTP sent by the
+     * authenticator is verified, since possession of the value is proven only by that OTP. Hence, an authenticator
+     * which accepts other codes, such as backup codes, must not accept them while a value is pending enrollment.
+     * Nothing is saved if the OTP was not sent to the value.
      *
-     * @param context       AuthenticationContext.
-     * @param verifiedByOTP Whether the authentication succeeded by verifying the OTP sent by the authenticator.
+     * @param context AuthenticationContext.
      * @throws AuthenticationFailedException If the value could not be saved.
      */
-    public void completeEnrollment(AuthenticationContext context, boolean verifiedByOTP)
-            throws AuthenticationFailedException {
+    public void completeEnrollment(AuthenticationContext context) throws AuthenticationFailedException {
 
         String value = getPendingValue(context);
         if (StringUtils.isBlank(value)) {
@@ -223,13 +220,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         AuthenticatedUser user = getSubjectAuthenticatedUser(context);
         if (user == null || user.isFederatedUser()) {
             clearEnrollment(context);
-            return;
-        }
-        if (!verifiedByOTP) {
-            // Possession of the value is proven only by the OTP sent to it.
-            clearEnrollment(context);
-            logEnrollment("The value is not enrolled since the authentication did not verify the OTP sent to it.",
-                    user, null, DiagnosticLog.ResultStatus.FAILED);
             return;
         }
         if (!value.equals(otpSentTo)) {
@@ -276,27 +266,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Add the value parameter to the data of app native authentication, while a value is requested from the user.
-     *
-     * @param context        AuthenticationContext.
-     * @param params         Parameter metadata of the authenticator.
-     * @param requiredParams Required parameters of the authenticator.
-     * @return True if the value parameter is added, in which case no other parameter is required.
-     */
-    public boolean addAuthInitiationParams(AuthenticationContext context, List<AuthenticatorParamMetadata> params,
-                                           List<String> requiredParams) {
-
-        if (context == null || !isAwaitingValue(context)) {
-            return false;
-        }
-        params.add(new AuthenticatorParamMetadata(getValueParameterName(),
-                getValueParameterDisplayName(), FrameworkConstants.AuthenticatorParamType.STRING, 0,
-                Boolean.FALSE, getValueParameterI18nKey()));
-        requiredParams.add(getValueParameterName());
-        return true;
-    }
-
-    /**
      * @return URI of the claim which holds the value of the channel, such as the mobile number claim.
      */
     protected abstract String getValueClaimUri();
@@ -312,20 +281,10 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     protected abstract String getValueParameterName();
 
     /**
-     * @return Display name of the value parameter for app native authentication.
-     */
-    protected abstract String getValueParameterDisplayName();
-
-    /**
-     * @return I18n key of the value parameter for app native authentication.
-     */
-    protected abstract String getValueParameterI18nKey();
-
-    /**
      * Get the prefix of the error message keys shown to the user. The keys are formed by appending
      * {@link EnrollmentConstants#INVALID_VALUE_MESSAGE_SUFFIX},
-     * {@link EnrollmentConstants#ENROLLMENT_FAILED_MESSAGE_SUFFIX} and
-     * {@link EnrollmentConstants#ATTEMPTS_EXCEEDED_MESSAGE_SUFFIX}.
+     * {@link EnrollmentConstants#ENROLLMENT_FAILED_MESSAGE_SUFFIX},
+     * {@link EnrollmentConstants#ATTEMPTS_EXCEEDED_MESSAGE_SUFFIX}, or a suffix returned by {@link #validateValue}.
      *
      * @return Prefix of the error message keys.
      */
@@ -387,6 +346,37 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     protected String normalize(String value) {
 
         return StringUtils.trimToNull(value);
+    }
+
+    /**
+     * Validate a value submitted for enrollment. By default, the value must not exceed the maximum length and must match
+     * the regex configured for the organization, or the default regex of the channel when none is configured. Override
+     * to add channel specific checks, calling this method first to keep the default checks.
+     *
+     * @param value   Normalized value, which is not blank.
+     * @param context AuthenticationContext.
+     * @return Suffix of the error message key shown to the user, such as
+     * {@link EnrollmentConstants#INVALID_VALUE_MESSAGE_SUFFIX}, if the value is not valid. Null if the value is valid.
+     * @throws AuthenticationFailedException If an error occurred while validating the value.
+     */
+    protected String validateValue(String value, AuthenticationContext context) throws AuthenticationFailedException {
+
+        if (value.length() > getMaxValueLength()) {
+            return INVALID_VALUE_MESSAGE_SUFFIX;
+        }
+        String tenantDomain = context.getTenantDomain();
+        String regex = getOrganizationSetting(getValueRegexSettingKey(), tenantDomain);
+        if (StringUtils.isBlank(regex)) {
+            regex = getDefaultValueRegex();
+        }
+        try {
+            return Pattern.matches(regex, value) ? null : INVALID_VALUE_MESSAGE_SUFFIX;
+        } catch (PatternSyntaxException e) {
+            // No value is accepted, so that a restriction intended by the configured regex is never bypassed.
+            LOG.error(String.format("The enrollment regex configured for %s in tenant: %s is not valid. Hence, " +
+                    "values cannot be enrolled.", authenticatorName, tenantDomain), e);
+            return INVALID_VALUE_MESSAGE_SUFFIX;
+        }
     }
 
     /**
@@ -497,12 +487,12 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             throws AuthenticationFailedException {
 
         // A value is enrolled only for a user who is identified by a preceding authentication step.
-        if (isFirstFactor(context) || !isEnrollmentEnabled(context)) {
+        if (isFirstFactor(context)) {
             return null;
         }
         AuthenticatedUser user = getSubjectAuthenticatedUser(context);
         // Attributes of federated users are managed by the federated identity provider.
-        if (user == null || user.isFederatedUser()) {
+        if (user == null || user.isFederatedUser() || !isEnrollmentEnabled(context)) {
             return null;
         }
         // A value configured for the user is never replaced from the authentication flow.
@@ -552,10 +542,12 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             throws AuthenticationFailedException {
 
         String value = normalize(request.getParameter(getValueParameterName()));
-        if (!isValidValue(value, context.getTenantDomain())) {
+        String validationError = StringUtils.isBlank(value) ? INVALID_VALUE_MESSAGE_SUFFIX :
+                validateValue(value, context);
+        if (validationError != null) {
             logEnrollment("The value submitted for enrollment is not valid.", user, null,
                     DiagnosticLog.ResultStatus.FAILED);
-            redirectToEnrollmentPage(request, response, context, getErrorQueryParams(INVALID_VALUE_MESSAGE_SUFFIX));
+            redirectToEnrollmentPage(request, response, context, getErrorQueryParams(validationError));
             return true;
         }
         if (!value.equals(getPendingValue(context))) {
@@ -584,34 +576,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         logEnrollment("Sending an OTP to verify the value submitted for enrollment.", user, value,
                 DiagnosticLog.ResultStatus.SUCCESS);
         return false;
-    }
-
-    /**
-     * Validate a value submitted for enrollment against the regex configured for the organization, or the default
-     * regex of the channel when none is configured.
-     *
-     * @param value        Normalized value.
-     * @param tenantDomain Tenant domain.
-     * @return True if the value is valid.
-     * @throws AuthenticationFailedException If an error occurred while getting the configuration.
-     */
-    private boolean isValidValue(String value, String tenantDomain) throws AuthenticationFailedException {
-
-        if (StringUtils.isBlank(value) || value.length() > getMaxValueLength()) {
-            return false;
-        }
-        String regex = getOrganizationSetting(getValueRegexSettingKey(), tenantDomain);
-        if (StringUtils.isBlank(regex)) {
-            regex = getDefaultValueRegex();
-        }
-        try {
-            return Pattern.matches(regex, value);
-        } catch (PatternSyntaxException e) {
-            // No value is accepted, so that a restriction intended by the configured regex is never bypassed.
-            LOG.error(String.format("The enrollment regex configured for %s in tenant: %s is not valid. Hence, " +
-                    "values cannot be enrolled.", authenticatorName, tenantDomain), e);
-            return false;
-        }
     }
 
     /**
