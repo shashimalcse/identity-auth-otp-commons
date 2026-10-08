@@ -67,22 +67,9 @@ import static org.wso2.carbon.identity.auth.otp.core.enrollment.EnrollmentConsta
 import static org.wso2.carbon.user.core.UserCoreConstants.PRIMARY_DEFAULT_DOMAIN_NAME;
 
 /**
- * Lets a user who does not have a value for an OTP channel, such as a mobile number, enroll one during the
- * authentication flow. The user is requested to enter a value, the OTP authenticator sends an OTP to it, and the value
- * is saved to the user profile as verified only after the OTP sent to that value is verified.
- * <p>
- * An OTP authenticator extends this class to supply the details of its channel, such as the claim which holds the
- * value, and calls the handler at the following points:
- * <ul>
- *     <li>{@link #handleInitiation} before initiating the OTP flow,</li>
- *     <li>{@link #isValueSubmission} while resolving the scenario of a request,</li>
- *     <li>{@link #getPendingValue} while resolving the value to send the OTP to, when the user has no value,</li>
- *     <li>{@link #recordOTPSent} when sending the OTP, and</li>
- *     <li>{@link #completeEnrollment} after the OTP is verified.</li>
- * </ul>
- * While {@link #isAwaitingValue} is true, app native authentication should request the value parameter instead of the
- * OTP. The OTP authenticator owns sending and verifying the OTP. A handler is shared across authentication requests.
- * Hence, it must be stateless, keeping the state of an enrollment in the authentication context.
+ * Lets a user without a value for an OTP channel, such as a mobile number, enroll one during authentication. The value
+ * is saved as verified only after the OTP sent to it is verified. Handlers are stateless; the enrollment state is kept
+ * in the authentication context.
  */
 public abstract class AbstractOTPProgressiveEnrollmentHandler {
 
@@ -92,11 +79,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     private final String errorCodePrefix;
     private final String diagnosticLogComponentId;
 
-    /**
-     * @param authenticatorName        Name of the OTP authenticator.
-     * @param errorCodePrefix          Error code prefix of the OTP authenticator.
-     * @param diagnosticLogComponentId Component ID used for the diagnostic logs of the enrollment.
-     */
     protected AbstractOTPProgressiveEnrollmentHandler(String authenticatorName, String errorCodePrefix,
                                                       String diagnosticLogComponentId) {
 
@@ -106,14 +88,13 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Handle the enrollment before the OTP flow is initiated. A user who is eligible is requested to enter a value,
-     * and a submitted value is kept as pending enrollment so that the OTP is sent to it.
+     * Handle the enrollment before the OTP flow is initiated.
      *
      * @param request  HttpServletRequest.
      * @param response HttpServletResponse.
      * @param context  AuthenticationContext.
-     * @return True if the request is handled by redirecting the user, false if the OTP flow should continue.
-     * @throws AuthenticationFailedException If an error occurred while handling the enrollment.
+     * @return True if the user is redirected, false if the OTP flow should continue.
+     * @throws AuthenticationFailedException If an error occurred.
      */
     public boolean handleInitiation(HttpServletRequest request, HttpServletResponse response,
                                     AuthenticationContext context) throws AuthenticationFailedException {
@@ -127,7 +108,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             return handleSubmittedValue(request, response, context, user);
         }
         if (StringUtils.isNotBlank(getPendingValue(context))) {
-            // An OTP is sent to the value pending enrollment. Resending and verifying it continue as usual.
             return false;
         }
         String errorQueryParams = (String) context.getProperty(contextKey(ENROLLMENT_ERROR));
@@ -137,8 +117,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Check whether the request submits a value for enrollment, while a value is requested from the user or is
-     * pending enrollment.
+     * Check whether the request submits a value for enrollment.
      *
      * @param request HttpServletRequest.
      * @param context AuthenticationContext.
@@ -152,16 +131,14 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
                 && isEnrollmentInProgress(context);
     }
 
-    /**
-     * @param context AuthenticationContext.
-     * @return True if a value is requested from the user or is pending enrollment.
-     */
     private boolean isEnrollmentInProgress(AuthenticationContext context) {
 
         return isAwaitingValue(context) || StringUtils.isNotBlank(getPendingValue(context));
     }
 
     /**
+     * Check whether a value is requested from the user.
+     *
      * @param context AuthenticationContext.
      * @return True if a value is requested from the user.
      */
@@ -171,8 +148,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Get the value pending enrollment. The OTP authenticator sends the OTP to this value when the user does not have
-     * a value, and the value is saved to the profile only after that OTP is verified.
+     * Get the value pending enrollment, to which the OTP is sent.
      *
      * @param context AuthenticationContext.
      * @return The value pending enrollment, or null if none.
@@ -184,7 +160,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Record the value to which an OTP is sent, so that the OTP can enroll only that value.
+     * Record the value to which the OTP is sent, so that the OTP can enroll only that value.
      *
      * @param context AuthenticationContext.
      * @param sentTo  Value to which the OTP is sent.
@@ -197,10 +173,8 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Save the value pending enrollment to the user profile as verified. Call this only after the OTP sent by the
-     * authenticator is verified, since possession of the value is proven only by that OTP. Hence, an authenticator
-     * which accepts other codes, such as backup codes, must not accept them while a value is pending enrollment.
-     * Nothing is saved if the OTP was not sent to the value.
+     * Save the pending value as verified. Call only after the OTP is verified; other codes, such as backup codes, must
+     * not be accepted while a value is pending.
      *
      * @param context AuthenticationContext.
      * @throws AuthenticationFailedException If the value could not be saved.
@@ -212,7 +186,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             return;
         }
         Object otpSentTo = context.getProperty(contextKey(OTP_SENT_TO_VALUE));
-        // The verified OTP is consumed. Hence, the value cannot be saved through another attempt with the same OTP.
         context.removeProperty(contextKey(PENDING_VALUE));
         context.removeProperty(contextKey(AWAITING_VALUE));
         context.removeProperty(contextKey(OTP_SENT_TO_VALUE));
@@ -244,7 +217,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
 
         Map<String, String> claims = new HashMap<>();
         claims.put(getValueClaimUri(), value);
-        // The value is verified by the OTP sent to it.
         claims.put(getVerifiedClaimUri(), Boolean.TRUE.toString());
         UserStoreManager userStoreManager = getUserStoreManager(user);
         try {
@@ -252,7 +224,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             userStoreManager.setUserClaimValues(
                     MultitenantUtils.getTenantAwareUsername(user.toFullQualifiedUsername()), claims, null);
         } catch (UserStoreException e) {
-            // The reason is not sent to the user, since it is not guaranteed to be free of internal details.
             context.setProperty(contextKey(ENROLLMENT_ERROR), getErrorQueryParams(ENROLLMENT_FAILED_MESSAGE_SUFFIX));
             logEnrollment("Failed to save the verified value to the user profile.", user, null,
                     DiagnosticLog.ResultStatus.FAILED);
@@ -266,7 +237,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * @return URI of the claim which holds the value of the channel, such as the mobile number claim.
+     * @return URI of the claim which holds the value, such as the mobile number claim.
      */
     protected abstract String getValueClaimUri();
 
@@ -276,37 +247,32 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     protected abstract String getVerifiedClaimUri();
 
     /**
-     * @return Name of the request parameter which carries the value submitted for enrollment.
+     * @return Name of the request parameter which carries the submitted value.
      */
     protected abstract String getValueParameterName();
 
     /**
-     * Get the prefix of the error message keys shown to the user. The keys are formed by appending
-     * {@link EnrollmentConstants#INVALID_VALUE_MESSAGE_SUFFIX},
-     * {@link EnrollmentConstants#ENROLLMENT_FAILED_MESSAGE_SUFFIX},
-     * {@link EnrollmentConstants#ATTEMPTS_EXCEEDED_MESSAGE_SUFFIX}, or a suffix returned by {@link #validateValue}.
-     *
-     * @return Prefix of the error message keys.
+     * @return Prefix of the error message keys shown to the user.
      */
     protected abstract String getMessageKeyPrefix();
 
     /**
-     * @return Name of the organization setting which enables enrolling a value during the authentication flow.
+     * @return Name of the organization setting which enables the enrollment.
      */
     protected abstract String getEnrollmentEnabledSettingKey();
 
     /**
-     * @return Name of the organization setting which holds the regex a submitted value should match.
+     * @return Name of the organization setting which holds the regex of the value.
      */
     protected abstract String getValueRegexSettingKey();
 
     /**
-     * @return Regex a submitted value should match when no regex is configured for the organization.
+     * @return Regex used when no regex is configured for the organization.
      */
     protected abstract String getDefaultValueRegex();
 
     /**
-     * @return URL of the page which requests a value from the user.
+     * @return URL of the page which requests the value.
      * @throws AuthenticationFailedException If an error occurred while building the URL.
      */
     protected abstract String getEnrollmentPageUrl() throws AuthenticationFailedException;
@@ -319,15 +285,14 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     protected abstract String getErrorPageUrl(AuthenticationContext context) throws AuthenticationFailedException;
 
     /**
-     * Invalidate the OTP held in the context, so that it can no longer complete the authentication.
+     * Invalidate the OTP held in the context.
      *
      * @param context AuthenticationContext.
      */
     protected abstract void invalidateOTP(AuthenticationContext context);
 
     /**
-     * Skip the verification which is otherwise initiated when the value claim is updated, since the value is
-     * already verified by the OTP. {@link #clearVerificationSkip()} is always called after the update.
+     * Skip the verification triggered on updating the value claim, since the OTP already verified the value.
      */
     protected abstract void skipVerificationOnUpdate();
 
@@ -337,8 +302,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     protected abstract void clearVerificationSkip();
 
     /**
-     * Remove the formatting characters commonly used with values of the channel. Leading and trailing whitespaces
-     * are removed by default.
+     * Normalize a submitted value. Trims whitespaces by default.
      *
      * @param value Value submitted by the user.
      * @return Normalized value, or null if the value is blank.
@@ -349,14 +313,11 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Validate a value submitted for enrollment. By default, the value must not exceed the maximum length and must match
-     * the regex configured for the organization, or the default regex of the channel when none is configured. Override
-     * to add channel specific checks, calling this method first to keep the default checks.
+     * Validate a submitted value against the maximum length and the regex. Override to add channel specific checks.
      *
-     * @param value   Normalized value, which is not blank.
+     * @param value   Normalized value.
      * @param context AuthenticationContext.
-     * @return Suffix of the error message key shown to the user, such as
-     * {@link EnrollmentConstants#INVALID_VALUE_MESSAGE_SUFFIX}, if the value is not valid. Null if the value is valid.
+     * @return Error message key suffix if the value is not valid, null otherwise.
      * @throws AuthenticationFailedException If an error occurred while validating the value.
      */
     protected String validateValue(String value, AuthenticationContext context) throws AuthenticationFailedException {
@@ -372,7 +333,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         try {
             return Pattern.matches(regex, value) ? null : INVALID_VALUE_MESSAGE_SUFFIX;
         } catch (PatternSyntaxException e) {
-            // No value is accepted, so that a restriction intended by the configured regex is never bypassed.
+            // Fail closed, so that the restriction intended by the regex is not bypassed.
             LOG.error(String.format("The enrollment regex configured for %s in tenant: %s is not valid. Hence, " +
                     "values cannot be enrolled.", authenticatorName, tenantDomain), e);
             return INVALID_VALUE_MESSAGE_SUFFIX;
@@ -380,7 +341,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * @return Maximum length of a submitted value, checked before matching the regex.
+     * @return Maximum length of a submitted value.
      */
     protected int getMaxValueLength() {
 
@@ -388,7 +349,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * @return Maximum number of different values that a user can submit for enrollment in an authentication flow.
+     * @return Maximum number of different values that can be submitted in an authentication flow.
      */
     protected int getMaxEnrollmentAttempts() {
 
@@ -396,7 +357,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Check whether the request submits or resends an OTP, in which case it is not treated as a value submission.
+     * Check whether the request submits or resends an OTP.
      *
      * @param request HttpServletRequest.
      * @return True if the request submits or resends an OTP.
@@ -408,8 +369,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Check whether the OTP authenticator is the first factor of the authentication flow, in which case no user is
-     * identified to enroll a value for.
+     * Check whether the OTP authenticator is the first factor.
      *
      * @param context AuthenticationContext.
      * @return True if the authenticator is the first factor.
@@ -420,7 +380,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     }
 
     /**
-     * Get a parameter configured for the authenticator in the server configuration.
+     * Get a parameter of the authenticator from the server configuration.
      *
      * @param parameterName Name of the parameter.
      * @return Value of the parameter, or null if not configured.
@@ -435,12 +395,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         return authenticatorConfig.getParameterMap().get(parameterName);
     }
 
-    /**
-     * Get the parameters set for the authenticator from the authentication script, along with the common options.
-     *
-     * @param context AuthenticationContext.
-     * @return Runtime parameters of the authenticator.
-     */
     private Map<String, String> getRuntimeParams(AuthenticationContext context) {
 
         Map<String, String> runtimeParams = new HashMap<>();
@@ -456,14 +410,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         return runtimeParams;
     }
 
-    /**
-     * Get a setting of the organization, configured through the connector of the authenticator.
-     *
-     * @param settingKey   Name of the setting.
-     * @param tenantDomain Tenant domain.
-     * @return Value of the setting, or null if not configured.
-     * @throws AuthenticationFailedException If an error occurred while getting the setting.
-     */
     private String getOrganizationSetting(String settingKey, String tenantDomain)
             throws AuthenticationFailedException {
 
@@ -476,26 +422,16 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         }
     }
 
-    /**
-     * Resolve the user, if the user is eligible to enroll a value in the current authentication flow.
-     *
-     * @param context AuthenticationContext.
-     * @return The user if eligible to enroll a value, null otherwise.
-     * @throws AuthenticationFailedException If an error occurred while resolving the user.
-     */
     private AuthenticatedUser resolveUserEligibleForEnrollment(AuthenticationContext context)
             throws AuthenticationFailedException {
 
-        // A value is enrolled only for a user who is identified by a preceding authentication step.
         if (isFirstFactor(context)) {
             return null;
         }
         AuthenticatedUser user = getSubjectAuthenticatedUser(context);
-        // Attributes of federated users are managed by the federated identity provider.
         if (user == null || user.isFederatedUser() || !isEnrollmentEnabled(context)) {
             return null;
         }
-        // A value configured for the user is never replaced from the authentication flow.
         if (StringUtils.isNotBlank(getValueFromUserStore(user))) {
             return null;
         }
@@ -505,16 +441,9 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         return user;
     }
 
-    /**
-     * Check whether enrollment is enabled. An application can opt out from the authentication script, but cannot
-     * enable the enrollment when it is not enabled for the organization.
-     *
-     * @param context AuthenticationContext.
-     * @return True if enrollment is enabled.
-     * @throws AuthenticationFailedException If an error occurred while getting the configuration.
-     */
     private boolean isEnrollmentEnabled(AuthenticationContext context) throws AuthenticationFailedException {
 
+        // An application can only opt out from the authentication script.
         Map<String, String> runtimeParams = getRuntimeParams(context);
         if (MapUtils.isNotEmpty(runtimeParams)) {
             String enrolUser = runtimeParams.get(EnrollmentConstants.ENROL_USER_IN_AUTHENTICATION_FLOW);
@@ -526,17 +455,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
                 getOrganizationSetting(getEnrollmentEnabledSettingKey(), context.getTenantDomain()));
     }
 
-    /**
-     * Handle a value submitted for enrollment. A valid value is kept as pending enrollment, so that the OTP is sent to
-     * it. A value is never saved to the user profile from here.
-     *
-     * @param request  HttpServletRequest.
-     * @param response HttpServletResponse.
-     * @param context  AuthenticationContext.
-     * @param user     User who enrolls the value.
-     * @return True if the request is handled by redirecting the user, false if an OTP should be sent to the value.
-     * @throws AuthenticationFailedException If an error occurred while handling the value.
-     */
     private boolean handleSubmittedValue(HttpServletRequest request, HttpServletResponse response,
                                          AuthenticationContext context, AuthenticatedUser user)
             throws AuthenticationFailedException {
@@ -565,28 +483,17 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
             }
             context.setProperty(contextKey(ENROLLMENT_ATTEMPTS), enrollmentAttempts + 1);
             context.setProperty(contextKey(PENDING_VALUE), value);
-            /* Invalidates an OTP sent to an earlier value. Otherwise, it could verify the new value if sending an OTP
-             to the new value is not allowed, such as when the resend limit is exceeded. */
+            // An OTP sent to an earlier value must not verify the new value.
             invalidateOTP(context);
             context.removeProperty(contextKey(OTP_SENT_TO_VALUE));
         }
         context.removeProperty(contextKey(AWAITING_VALUE));
-        // An OTP is sent to the submitted value afresh. Hence, failures of an earlier OTP are not carried forward.
         context.setRetrying(false);
         logEnrollment("Sending an OTP to verify the value submitted for enrollment.", user, value,
                 DiagnosticLog.ResultStatus.SUCCESS);
         return false;
     }
 
-    /**
-     * Redirect the user to the page which requests a value.
-     *
-     * @param request          HttpServletRequest.
-     * @param response         HttpServletResponse.
-     * @param context          AuthenticationContext.
-     * @param errorQueryParams Query params of the error to be shown on the page. Can be null.
-     * @throws AuthenticationFailedException If an error occurred while redirecting.
-     */
     private void redirectToEnrollmentPage(HttpServletRequest request, HttpServletResponse response,
                                           AuthenticationContext context, String errorQueryParams)
             throws AuthenticationFailedException {
@@ -607,15 +514,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         }
     }
 
-    /**
-     * Redirect the user to the error page, when the enrollment cannot be continued.
-     *
-     * @param request          HttpServletRequest.
-     * @param response         HttpServletResponse.
-     * @param context          AuthenticationContext.
-     * @param errorQueryParams Query params of the error to be shown on the page.
-     * @throws AuthenticationFailedException If an error occurred while redirecting.
-     */
     private void redirectToErrorPage(HttpServletRequest request, HttpServletResponse response,
                                      AuthenticationContext context, String errorQueryParams)
             throws AuthenticationFailedException {
@@ -635,8 +533,7 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
     private void clearEnrollment(AuthenticationContext context) {
 
         if (context.getProperty(contextKey(OTP_SENT_TO_VALUE)) != null) {
-            /* An OTP sent to a value pending enrollment must not complete the authentication once the enrollment is
-             discontinued, such as when a value is configured for the user in the meantime. */
+            // An OTP sent to a discontinued value must not complete the authentication.
             invalidateOTP(context);
         }
         context.removeProperty(contextKey(AWAITING_VALUE));
@@ -662,12 +559,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
         return AUTH_FAILURE_QUERY_PARAMS + getMessageKeyPrefix() + messageKeySuffix;
     }
 
-    /**
-     * Get the user identified by the subject attribute step of the authentication flow.
-     *
-     * @param context AuthenticationContext.
-     * @return The user, or null if no user is identified yet.
-     */
     private static AuthenticatedUser getSubjectAuthenticatedUser(AuthenticationContext context) {
 
         if (context.getSequenceConfig() == null || context.getSequenceConfig().getStepMap() == null) {
@@ -748,14 +639,6 @@ public abstract class AbstractOTPProgressiveEnrollmentHandler {
                 new AuthenticationFailedException(errorCode, message, throwable);
     }
 
-    /**
-     * Record the progress of an enrollment as a diagnostic log.
-     *
-     * @param resultMessage Message describing the progress.
-     * @param user          User who enrolls the value.
-     * @param value         Value related to the progress. Can be null.
-     * @param resultStatus  Result status of the diagnostic log.
-     */
     private void logEnrollment(String resultMessage, AuthenticatedUser user, String value,
                                DiagnosticLog.ResultStatus resultStatus) {
 

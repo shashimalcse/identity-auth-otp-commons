@@ -27,7 +27,7 @@ public class EnrollmentConstants {
 
     }
 
-    // Runtime parameter which can be used from the authentication script to opt an application out.
+    // Authentication script parameter to opt an application out.
     public static final String ENROL_USER_IN_AUTHENTICATION_FLOW = "enrolUserInAuthenticationFlow";
 
     // Authentication context properties, prefixed with the authenticator name.
